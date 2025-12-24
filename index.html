@@ -5,18 +5,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Org Mindmap</title>
     <style>
+        /* ===== Theme Definitions ===== */
         :root {
-            --bg-color: #1a1a2e;
-            --fg-color: #e0e0e0;
+            /* Default: Doom One */
+            --bg-color: #282c34;
+            --fg-color: #bbc2cf;
             --link-color: #5c6773;
-            --node-color-1: #51afef;
-            --node-color-2: #c678dd;
-            --node-color-3: #98be65;
-            --node-color-4: #ecbe7b;
-            --node-color-5: #ff6c6b;
-            --node-color-6: #a9a1e1;
         }
 
+        /* Layout constants */
+        :root {
+            --layout-top: 10px;
+            --layout-right-theme: 10px;
+            --layout-right-dir: 150px;
+        }
+
+        :root[data-theme="doom-one"] {
+            --bg-color: #282c34;
+            --fg-color: #bbc2cf;
+            --link-color: #5c6773;
+        }
+
+        :root[data-theme="doom-light"] {
+            --bg-color: #fafafa;
+            --fg-color: #383a42;
+            --link-color: #a0a1a7;
+        }
+
+        :root[data-theme="monokai"] {
+            --bg-color: #272822;
+            --fg-color: #f8f8f2;
+            --link-color: #75715e;
+        }
+
+        :root[data-theme="nord"] {
+            --bg-color: #2e3440;
+            --fg-color: #eceff4;
+            --link-color: #4c566a;
+        }
+
+        :root[data-theme="dracula"] {
+            --bg-color: #282a36;
+            --fg-color: #f8f8f2;
+            --link-color: #6272a4;
+        }
+
+        :root[data-theme="solarized-dark"] {
+            --bg-color: #002b36;
+            --fg-color: #839496;
+            --link-color: #586e75;
+        }
+
+        :root[data-theme="solarized-light"] {
+            --bg-color: #fdf6e3;
+            --fg-color: #657b83;
+            --link-color: #93a1a1;
+        }
+
+        :root[data-theme="gruvbox"] {
+            --bg-color: #282828;
+            --fg-color: #ebdbb2;
+            --link-color: #665c54;
+        }
+
+        /* ===== Base Styles ===== */
         * {
             margin: 0;
             padding: 0;
@@ -35,30 +87,9 @@
         #mindmap {
             width: 100%;
             height: 100%;
-            display: block;
         }
 
-        .markmap-node-text {
-            fill: var(--fg-color) !important;
-            cursor: pointer;
-            transition: fill 0.2s ease;
-        }
-
-        .markmap-node-text:hover {
-            fill: var(--node-color-1) !important;
-        }
-
-        .markmap-link {
-            stroke: var(--link-color) !important;
-            stroke-width: 1.5px;
-        }
-
-        .markmap-node-circle {
-            stroke-width: 1.5px;
-            cursor: pointer;
-        }
-
-        /* Loading state */
+        /* Loading overlay */
         .loading-overlay {
             position: fixed;
             top: 0;
@@ -80,6 +111,7 @@
             pointer-events: none;
         }
 
+        /* Status indicator */
         .status {
             position: fixed;
             bottom: 10px;
@@ -92,6 +124,7 @@
             display: flex;
             gap: 8px;
             align-items: center;
+            z-index: 100;
         }
 
         .status-dot {
@@ -101,14 +134,10 @@
             background: #888;
         }
 
-        .status-dot.connected {
-            background: #98be65;
-        }
+        .status-dot.connected { background: #98be65; }
+        .status-dot.disconnected { background: #ff6c6b; }
 
-        .status-dot.disconnected {
-            background: #ff6c6b;
-        }
-
+        /* Focus badge */
         .focus-badge {
             position: fixed;
             top: 10px;
@@ -120,13 +149,37 @@
             border-radius: 6px;
             border: 1px solid rgba(81, 175, 239, 0.4);
             display: none;
+            z-index: 100;
         }
 
-        .focus-badge.visible {
-            display: block;
+        .focus-badge.visible { display: block; }
+
+        /* Theme & Layout selectors */
+        .controls-container {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+            display: flex;
+            gap: 10px;
         }
 
-        /* Click hint tooltip */
+        .selector-group select {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(0, 0, 0, 0.6);
+            color: #ccc;
+            font-size: 12px;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .selector-group select:hover {
+            background: rgba(0, 0, 0, 0.8);
+        }
+
+        /* Click hint */
         .click-hint {
             position: fixed;
             bottom: 50px;
@@ -139,251 +192,574 @@
             opacity: 0;
             transition: opacity 0.3s ease;
             pointer-events: none;
+            z-index: 100;
         }
 
-        .click-hint.visible {
-            opacity: 1;
+        .click-hint.visible { opacity: 1; }
+
+        /* Sync indicator */
+        .sync-indicator {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            padding: 6px 12px;
+            background: rgba(152, 190, 101, 0.2);
+            color: #98be65;
+            font-size: 11px;
+            border-radius: 6px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 100;
         }
+
+        .sync-indicator.visible { opacity: 1; }
     </style>
-    <!-- Markmap dependencies - use specific versions -->
-    <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5/dist/d3.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.15.4/dist/browser/index.js"></script>
 </head>
 <body>
     <div class="loading-overlay" id="loading">
         <span>Loading mindmap...</span>
     </div>
     <div class="focus-badge" id="focusBadge">🎯 Focus Mode</div>
-    <svg id="mindmap"></svg>
+    
+    <div class="controls-container">
+        <div class="selector-group">
+            <select id="layoutSelect" onchange="changeLayout(this.value)">
+                <option value="right">Right (Left to Right)</option>
+                <option value="left">Left (Right to Left)</option>
+                <option value="side">Side (Balanced)</option>
+            </select>
+        </div>
+        <div class="selector-group">
+            <select id="themeSelect" onchange="changeTheme(this.value)">
+                <option value="doom-one">Doom One</option>
+                <option value="doom-light">Doom Light</option>
+                <option value="monokai">Monokai</option>
+                <option value="nord">Nord</option>
+                <option value="dracula">Dracula</option>
+                <option value="solarized-dark">Solarized Dark</option>
+                <option value="solarized-light">Solarized Light</option>
+                <option value="gruvbox">Gruvbox</option>
+            </select>
+        </div>
+    </div>
+    
+    <div id="mindmap"></div>
+    
     <div class="status">
         <div class="status-dot" id="statusDot"></div>
         <span id="statusText">Connecting...</span>
     </div>
     <div class="click-hint" id="clickHint">💡 Click any node to jump to it in Emacs</div>
+    <div class="sync-indicator" id="syncIndicator">✓ Synced to Emacs</div>
 
-    <script>
-        // Wait for markmap to be available
-        const { Markmap } = window.markmap;
+    <!-- Local Mind-elixir (includes embedded CSS) -->
+    <script type="module">
+        import MindElixir from './MindElixir.js';
 
-        let themeColors = null;
-        let nodePositions = new Map(); // Store begin positions for each node
-        let mm = null; // Markmap instance
+        // Theme color palettes for nodes
+        const THEME_PALETTES = {
+            'doom-one':        ['#51afef', '#c678dd', '#98be65', '#ecbe7b', '#ff6c6b', '#a9a1e1'],
+            'doom-light':      ['#4078f2', '#a626a4', '#50a14f', '#c18401', '#e45649', '#b751b6'],
+            'monokai':         ['#66d9ef', '#ae81ff', '#a6e22e', '#e6db74', '#f92672', '#fd971f'],
+            'nord':            ['#88c0d0', '#b48ead', '#a3be8c', '#ebcb8b', '#bf616a', '#5e81ac'],
+            'dracula':         ['#8be9fd', '#bd93f9', '#50fa7b', '#f1fa8c', '#ff5555', '#ffb86c'],
+            'solarized-dark':  ['#268bd2', '#6c71c4', '#859900', '#b58900', '#dc322f', '#2aa198'],
+            'solarized-light': ['#268bd2', '#6c71c4', '#859900', '#b58900', '#dc322f', '#2aa198'],
+            'gruvbox':         ['#83a598', '#d3869b', '#b8bb26', '#fabd2f', '#fb4934', '#fe8019']
+        };
 
+        const THEME_CSS_VARS = {
+            'doom-one': {
+                '--main-color': '#bbc2cf',
+                '--main-bgcolor': '#282c34',
+                '--color': '#bbc2cf',
+                '--bgcolor': '#282c34',
+            },
+            'doom-light': {
+                '--main-color': '#383a42',
+                '--main-bgcolor': '#fafafa',
+                '--color': '#383a42',
+                '--bgcolor': '#fafafa',
+            },
+            'monokai': {
+                '--main-color': '#f8f8f2',
+                '--main-bgcolor': '#272822',
+                '--color': '#f8f8f2',
+                '--bgcolor': '#272822',
+            },
+            'nord': {
+                '--main-color': '#eceff4',
+                '--main-bgcolor': '#2e3440',
+                '--color': '#eceff4',
+                '--bgcolor': '#2e3440',
+            },
+            'dracula': {
+                '--main-color': '#f8f8f2',
+                '--main-bgcolor': '#282a36',
+                '--color': '#f8f8f2',
+                '--bgcolor': '#282a36',
+            },
+            'solarized-dark': {
+                '--main-color': '#839496',
+                '--main-bgcolor': '#002b36',
+                '--color': '#839496',
+                '--bgcolor': '#002b36',
+            },
+            'solarized-light': {
+                '--main-color': '#657b83',
+                '--main-bgcolor': '#fdf6e3',
+                '--color': '#657b83',
+                '--bgcolor': '#fdf6e3',
+            },
+            'gruvbox': {
+                '--main-color': '#ebdbb2',
+                '--main-bgcolor': '#282828',
+                '--color': '#ebdbb2',
+                '--bgcolor': '#282828',
+            }
+        };
+
+
+
+        let currentTheme = localStorage.getItem('mindmap-theme') || 'doom-one';
+        let currentLayout = localStorage.getItem('mindmap-layout') || 'right';
+        let mind = null;
         let lastDataHash = '';
         let pollInterval = 1000;
+        let nodePositionMap = new Map(); // Map node ID to begin position
+        let isUpdating = false;
 
-        // Simple hash function to detect changes
+        // Hash function for change detection
         function hashString(str) {
             let hash = 0;
             for (let i = 0; i < str.length; i++) {
-                const char = str.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
                 hash = hash & hash;
             }
             return hash.toString();
         }
 
-        // Apply theme colors to CSS variables
-        function applyTheme(theme) {
-            if (!theme) return;
-            
-            const root = document.documentElement;
-            if (theme.background) {
-                root.style.setProperty('--bg-color', theme.background);
-            }
-            if (theme.foreground) {
-                root.style.setProperty('--fg-color', theme.foreground);
-            }
-            if (theme.linkColor) {
-                root.style.setProperty('--link-color', theme.linkColor);
-            }
-            if (theme.nodeColors) {
-                theme.nodeColors.forEach((color, i) => {
-                    root.style.setProperty(`--node-color-${i + 1}`, color);
-                });
-            }
+        // Initialize theme and layout
+        function initSettings() {
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            document.getElementById('themeSelect').value = currentTheme;
+            document.getElementById('layoutSelect').value = currentLayout;
         }
 
-        // Convert server data to markmap format and track positions
-        function convertToMarkmapData(node, depth = 0) {
+        // Change theme
+        window.changeTheme = function(theme) {
+            currentTheme = theme;
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('mindmap-theme', theme);
+            
+            if (mind) {
+                mind.changeTheme({
+                    name: theme,
+                    palette: THEME_PALETTES[theme] || THEME_PALETTES['doom-one'],
+                    cssVar: THEME_CSS_VARS[theme] || THEME_CSS_VARS['doom-one']
+                });
+            }
+        };
+
+        // Change layout
+        window.changeLayout = function(layout) {
+            currentLayout = layout;
+            localStorage.setItem('mindmap-layout', layout);
+            
+            if (mind) {
+                if (layout === 'left') {
+                    mind.initLeft();
+                } else if (layout === 'right') {
+                    mind.initRight();
+                } else if (layout === 'side') {
+                    mind.initSide();
+                }
+                fitView();
+            }
+        };
+
+        // Fit view to content
+        window.fitView = function() {
+            if (!mind) return;
+
+            // Wait a brief moment for layout to settle
+            setTimeout(() => {
+                try {
+                    // Try to calculate bounding box of content
+                    // Nodes are usually within ME-ROOT and ME-MAIN elements inside the map-canvas
+                    const root = mind.nodes.querySelector('me-root');
+                    if (!root) {
+                        mind.toCenter();
+                        return;
+                    }
+                    
+                    // Reset scale first
+                    mind.scale(1);
+                    
+                    // Get container dimensions
+                    const container = mind.container;
+                    const cWidth = container.offsetWidth;
+                    const cHeight = container.offsetHeight;
+                    
+                    // Simple heuristic: Get the union bounds of all major top-level blocks
+                    // This is approximate because MindElixir uses absolute positioning relative to a large canvas
+                    
+                    const mains = Array.from(mind.nodes.querySelectorAll('me-main, me-root'));
+                    if (mains.length === 0) {
+                        mind.toCenter();
+                        return;
+                    }
+
+                    // To get real positions, we need to consider they are on a translated canvas or absolute positions
+                    // But MindElixir's toCenter() centers the coordinate (10000, 10000)
+                    // Let's assume content is roughly centered around there after layout.
+                    // Instead of complex bbox math which might be flaky with transformations, 
+                    // let's rely on MindElixir's internal logic if possible, or just default to proper center and a "safe" scale.
+                    
+                    // Better approach: MindElixir doesn't strictly "bound" content.
+                    // Let's try to just center and set a reasonable zoom if standard `toCenter` isn't enough.
+                    // But `toCenter` simply scrolls to center.
+                    
+                    mind.toCenter();
+                    
+                    // If we really want to fit:
+                    // 1. Get bounds of all <me-tpc> elements? Too many.
+                    // 2. Just scaling down a bit (e.g. 0.8) is often enough for typical mindmaps to show more context.
+                    // 3. Or iterate all `me-main` + `me-root` to find min/max offsetLeft/Top.
+                    
+                    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                    
+                    mains.forEach(el => {
+                        minX = Math.min(minX, el.offsetLeft);
+                        minY = Math.min(minY, el.offsetTop);
+                        maxX = Math.max(maxX, el.offsetLeft + el.offsetWidth);
+                        maxY = Math.max(maxY, el.offsetTop + el.offsetHeight);
+                    });
+                    
+                    const contentW = maxX - minX + 100; // padding
+                    const contentH = maxY - minY + 100;
+                    
+                    if (contentW > 0 && contentH > 0) {
+                        const scaleX = cWidth / contentW;
+                        const scaleY = cHeight / contentH;
+                        const scale = Math.min(scaleX, scaleY, 1.0) * 0.9; // 0.9 for safety margin
+                        
+                        if (scale < 1) {
+                            mind.scale(scale);
+                        }
+                    }
+                    
+                    // Re-center after scaling
+                    mind.toCenter();
+                    
+                } catch (e) {
+                    console.error('Fit view failed:', e);
+                    mind.toCenter();
+                }
+            }, 100);
+        };
+
+        // Get Mind-elixir theme config
+        function getThemeConfig() {
+            return {
+                name: currentTheme,
+                palette: THEME_PALETTES[currentTheme] || THEME_PALETTES['doom-one'],
+                cssVar: THEME_CSS_VARS[currentTheme] || THEME_CSS_VARS['doom-one']
+            };
+        }
+
+        // Convert server data to Mind-elixir format
+        function convertToMindElixirData(node, isRoot = false) {
             if (!node) return null;
             
-            const nodeData = {
-                content: node.content || '',
-                children: (node.children || []).map((child) => 
-                    convertToMarkmapData(child, depth + 1)
-                ).filter(Boolean),
-                payload: {
-                    begin: node.begin
-                }
-            };
+            const id = node.id || ('node-' + (node.begin || Math.random().toString(36).substr(2, 9)));
             
-            // Store the begin position for navigation
+            // Store position mapping
             if (node.begin !== undefined) {
-                nodePositions.set(node.content, node.begin);
+                nodePositionMap.set(id, node.begin);
             }
             
-            return nodeData;
+            const result = {
+                topic: node.topic || node.content || '',
+                id: id,
+                expanded: node.expanded !== false,
+                children: []
+            };
+            
+            // Add root marker
+            if (isRoot) {
+                result.root = true;
+            }
+            
+            // Process children
+            if (node.children && Array.isArray(node.children)) {
+                result.children = node.children
+                    .map(child => convertToMindElixirData(child, false))
+                    .filter(Boolean);
+            }
+            
+            // Copy style if present
+            if (node.style) {
+                result.style = node.style;
+            }
+            
+            // Copy tags if present
+            if (node.tags) {
+                result.tags = node.tags;
+            }
+            
+            return result;
+        }
+
+        // Convert full response to Mind-elixir data structure
+        function processServerData(data) {
+            nodePositionMap.clear();
+            
+            const nodeData = convertToMindElixirData(data, true);
+            
+            return {
+                nodeData: nodeData,
+                summaries: data.summaries || []
+            };
         }
 
         // Navigate to position in Emacs
         async function gotoEmacs(position) {
             try {
                 await fetch(`/goto?pos=${position}`);
+                showSyncIndicator();
             } catch (error) {
                 console.error('Failed to navigate:', error);
             }
         }
 
-        // Set up click handlers on the SVG
-        function setupClickHandlers() {
-            const svg = document.getElementById('mindmap');
-            svg.addEventListener('click', (event) => {
-                const target = event.target;
-                
-                // Check if clicked on text or circle
-                if (target.classList.contains('markmap-node-text') || 
-                    target.classList.contains('markmap-node-circle') ||
-                    target.closest('.markmap-node')) {
-                    
-                    // Find the text content
-                    let textElement = target;
-                    if (!target.classList.contains('markmap-node-text')) {
-                        const node = target.closest('.markmap-node');
-                        if (node) {
-                            textElement = node.querySelector('.markmap-node-text');
-                        }
+        // Sync node edit back to Emacs
+        async function syncNodeEdit(nodeId, newTopic, oldTopic) {
+            try {
+                const position = nodePositionMap.get(nodeId);
+                if (position !== undefined) {
+                    isUpdating = true;
+                    const response = await fetch('/update', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            position: position,
+                            oldTopic: oldTopic,
+                            newTopic: newTopic,
+                            nodeId: nodeId
+                        })
+                    });
+                    if (response.ok) {
+                        showSyncIndicator();
                     }
-                    
-                    if (textElement && textElement.textContent) {
-                        const content = textElement.textContent.trim();
-                        const position = nodePositions.get(content);
-                        
-                        if (position !== undefined) {
-                            gotoEmacs(position);
-                            
-                            // Visual feedback
-                            textElement.style.transition = 'fill 0.1s ease';
-                            const originalFill = textElement.style.fill;
-                            textElement.style.fill = '#51afef';
-                            setTimeout(() => {
-                                textElement.style.fill = originalFill || '';
-                            }, 200);
-                        }
+                    setTimeout(() => { isUpdating = false; }, 500);
+                }
+            } catch (error) {
+                console.error('Failed to sync edit:', error);
+                isUpdating = false;
+            }
+        }
+
+        // Sync new node to Emacs
+        async function syncNewNode(parentId, topic, type) {
+            try {
+                const parentPosition = nodePositionMap.get(parentId);
+                if (parentPosition !== undefined) {
+                    isUpdating = true;
+                    const response = await fetch('/add-node', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            parentPosition: parentPosition,
+                            topic: topic,
+                            type: type // 'child' or 'sibling'
+                        })
+                    });
+                    if (response.ok) {
+                        showSyncIndicator();
                     }
+                    setTimeout(() => { isUpdating = false; }, 500);
+                }
+            } catch (error) {
+                console.error('Failed to sync new node:', error);
+                isUpdating = false;
+            }
+        }
+
+        // Sync node deletion to Emacs
+        async function syncDeleteNode(nodeId) {
+            try {
+                const position = nodePositionMap.get(nodeId);
+                if (position !== undefined) {
+                    isUpdating = true;
+                    const response = await fetch('/delete-node', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            position: position,
+                            nodeId: nodeId
+                        })
+                    });
+                    if (response.ok) {
+                        showSyncIndicator();
+                    }
+                    setTimeout(() => { isUpdating = false; }, 500);
+                }
+            } catch (error) {
+                console.error('Failed to sync deletion:', error);
+                isUpdating = false;
+            }
+        }
+
+        // Show sync indicator
+        function showSyncIndicator() {
+            const indicator = document.getElementById('syncIndicator');
+            indicator.classList.add('visible');
+            setTimeout(() => indicator.classList.remove('visible'), 1500);
+        }
+
+        // Check focus mode
+        function checkFocusMode(data) {
+            const badge = document.getElementById('focusBadge');
+            const topic = data.topic || data.content || '';
+            badge.classList.toggle('visible', topic.includes('[focused]'));
+        }
+
+        // Set up Mind-elixir event handlers
+        function setupEventHandlers() {
+            if (!mind) return;
+            
+            // Single click to navigate to Emacs
+            mind.bus.addListener('selectNode', (node) => {
+                const position = nodePositionMap.get(node.id);
+                if (position !== undefined) {
+                    gotoEmacs(position);
+                }
+            });
+            
+            // Node edit finished - sync to Emacs
+            mind.bus.addListener('finishEdit', (node) => {
+                // The node object contains the updated topic
+                if (node._oldTopic && node._oldTopic !== node.topic) {
+                    syncNodeEdit(node.id, node.topic, node._oldTopic);
+                }
+            });
+            
+            // Track old value before editing
+            mind.bus.addListener('beginEdit', (node) => {
+                node._oldTopic = node.topic;
+            });
+            
+            // Operation handler for add/remove nodes
+            mind.bus.addListener('operation', (operation) => {
+                if (operation.name === 'addChild') {
+                    const node = operation.obj;
+                    const parentId = node.parent?.id;
+                    if (parentId) {
+                        syncNewNode(parentId, node.topic, 'child');
+                    }
+                } else if (operation.name === 'insertSibling') {
+                    const node = operation.obj;
+                    const parentId = node.parent?.id;
+                    if (parentId) {
+                        syncNewNode(parentId, node.topic, 'sibling');
+                    }
+                } else if (operation.name === 'removeNode') {
+                    syncDeleteNode(operation.obj.id);
                 }
             });
         }
 
-        // Fetch theme from Emacs
-        async function fetchTheme() {
-            try {
-                const response = await fetch('/theme');
-                if (response.ok) {
-                    themeColors = await response.json();
-                    applyTheme(themeColors);
-                }
-            } catch (error) {
-                console.log('Using default theme');
-            }
-        }
-
-        // Check for focus mode
-        function checkFocusMode(data) {
-            const focusBadge = document.getElementById('focusBadge');
-            if (data.content && data.content.includes('[focused]')) {
-                focusBadge.classList.add('visible');
-            } else {
-                focusBadge.classList.remove('visible');
-            }
-        }
-
-        // Create color function for markmap
-        function getColorFunction() {
-            const defaultColors = ['#51afef', '#c678dd', '#98be65', '#ecbe7b', '#ff6c6b', '#a9a1e1'];
-            return (node) => {
-                const depth = node.state?.depth || 0;
-                if (themeColors && themeColors.nodeColors && themeColors.nodeColors.length > 0) {
-                    return themeColors.nodeColors[depth % themeColors.nodeColors.length];
-                }
-                return defaultColors[depth % defaultColors.length];
-            };
-        }
-
-        // Fetch data and update mindmap
+        // Fetch and update mindmap
         async function fetchAndUpdate() {
+            // Skip update if we're in the middle of syncing changes
+            if (isUpdating) return;
+            
             try {
                 const response = await fetch('/data');
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                const text = await response.text();
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
-                // Check if response is empty or just {}
-                if (!text || text === '{}') {
-                    console.log('No data yet');
-                    return;
-                }
+                const text = await response.text();
+                if (!text || text === '{}') return;
                 
                 const dataHash = hashString(text);
-
-                // Only update if data changed
                 if (dataHash !== lastDataHash) {
                     lastDataHash = dataHash;
                     const data = JSON.parse(text);
                     
-                    console.log('Received data:', data);
-                    
-                    // Check focus mode
                     checkFocusMode(data);
+                    const { nodeData, summaries } = processServerData(data);
                     
-                    // Clear and rebuild position map
-                    nodePositions.clear();
-                    const markmapData = convertToMarkmapData(data);
-                    
-                    console.log('Converted data:', markmapData);
-                    
-                    if (markmapData) {
-                        const svg = document.getElementById('mindmap');
-                        
-                        // Initialize or update markmap
-                        if (!mm) {
-                            mm = Markmap.create(svg, {
-                                color: getColorFunction(),
-                                paddingX: 16,
-                                autoFit: true,
-                                duration: 300,
-                            }, markmapData);
+                    if (nodeData) {
+                        if (!mind) {
+                            // Initialize Mind-elixir
+                            let dir = MindElixir.RIGHT;
+                            if (currentLayout === 'left') dir = MindElixir.LEFT;
+                            if (currentLayout === 'side') dir = MindElixir.SIDE;
+
+                            mind = new MindElixir({
+                                el: '#mindmap',
+                                direction: dir,
+                                draggable: true,
+                                editable: true,
+                                contextMenu: true,
+                                nodeMenu: true,
+                                toolBar: false,
+                                keypress: true,
+                                theme: getThemeConfig(),
+                            });
+                            
+                            mind.init({ nodeData });
+                            setupEventHandlers();
+                            
+                            // Add summaries if present
+                            if (summaries && summaries.length > 0) {
+                                summaries.forEach(summary => {
+                                    try {
+                                        mind.createSummary(summary.parent, summary.start, summary.end, summary.label);
+                                    } catch (e) {
+                                        console.warn('Failed to create summary:', e);
+                                    }
+                                });
+                            }
+
+                            // Initial fit view
+                            fitView();
                         } else {
-                            mm.setData(markmapData);
-                            mm.fit();
+                            // Refresh data
+                            mind.refresh({ nodeData });
+                            
+                            // Re-add summaries
+                            if (summaries && summaries.length > 0) {
+                                summaries.forEach(summary => {
+                                    try {
+                                        mind.createSummary(summary.parent, summary.start, summary.end, summary.label);
+                                    } catch (e) {
+                                        console.warn('Failed to create summary:', e);
+                                    }
+                                });
+                            }
                         }
                         
-                        // Hide loading overlay on first successful load
                         document.getElementById('loading').classList.add('hidden');
                     }
                 }
                 
-                // Update status
                 document.getElementById('statusDot').classList.add('connected');
                 document.getElementById('statusDot').classList.remove('disconnected');
                 document.getElementById('statusText').textContent = 'Connected';
                 
             } catch (error) {
-                console.error('Error fetching data:', error);
+                console.error('Error:', error);
                 document.getElementById('statusDot').classList.remove('connected');
                 document.getElementById('statusDot').classList.add('disconnected');
                 document.getElementById('statusText').textContent = 'Disconnected';
             }
         }
 
-        // Fetch config and start polling
+        // Initialize
         async function init() {
-            console.log('Initializing mindmap...');
-            console.log('Markmap available:', !!window.markmap);
-            
-            // Fetch theme first
-            await fetchTheme();
+            initSettings();
             
             try {
                 const configResponse = await fetch('/config');
@@ -391,38 +767,25 @@
                     const config = await configResponse.json();
                     pollInterval = config.pollInterval || 1000;
                 }
-            } catch (e) {
-                console.log('Using default poll interval');
-            }
+            } catch (e) {}
 
-            // Set up click handlers
-            setupClickHandlers();
-
-            // Show click hint briefly
-            const clickHint = document.getElementById('clickHint');
+            // Show hint
             setTimeout(() => {
-                clickHint.classList.add('visible');
-                setTimeout(() => {
-                    clickHint.classList.remove('visible');
-                }, 4000);
+                const hint = document.getElementById('clickHint');
+                hint.classList.add('visible');
+                setTimeout(() => hint.classList.remove('visible'), 4000);
             }, 2000);
 
-            // Initial fetch
             await fetchAndUpdate();
-
-            // Start polling for data
             setInterval(fetchAndUpdate, pollInterval);
-            
-            // Refresh theme periodically (every 5 seconds)
-            setInterval(fetchTheme, 5000);
         }
 
-        // Handle window resize
         window.addEventListener('resize', () => {
-            if (mm) mm.fit();
+            if (mind) {
+                mind.toCenter();
+            }
         });
-
-        // Start the application
+        
         init();
     </script>
 </body>

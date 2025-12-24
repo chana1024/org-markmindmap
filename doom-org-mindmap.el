@@ -1,7 +1,7 @@
-;;; doom-org-mindmap.el --- Convert Org documents to Markmap mindmaps -*- lexical-binding: t; -*-
+;;; doom-org-mindmap.el --- Convert Org documents to Mind-elixir mindmaps -*- lexical-binding: t; -*-
 
 ;; Author: Your Name
-;; Version: 1.1.0
+;; Version: 2.0.0
 ;; Package-Requires: ((emacs "27.1") (simple-httpd "1.5.1"))
 ;; Keywords: org, mindmap, visualization
 ;; URL: https://github.com/yourusername/doom-org-mindmap
@@ -9,13 +9,14 @@
 ;;; Commentary:
 
 ;; This package provides real-time conversion of Org documents to interactive
-;; mindmaps using Markmap. It follows Doom Emacs naming conventions.
+;; mindmaps using Mind-elixir. It follows Doom Emacs naming conventions.
 ;;
 ;; Features:
-;; - Real-time org-to-mindmap conversion
+;; - Real-time org-to-mindmap conversion via JSON
 ;; - Bidirectional sync: click nodes to jump to headlines
+;; - Edit in mindmap and sync back to Emacs
 ;; - Focus mode: respects org-narrow-to-subtree
-;; - Theme sync: extracts colors from current Emacs theme
+;; - Summary nodes support via :summary: tag or SUMMARY property
 
 ;;; Code:
 
@@ -26,7 +27,7 @@
 ;;; Customization
 
 (defgroup doom-org-mindmap nil
-  "Convert Org documents to Markmap mindmaps."
+  "Convert Org documents to Mind-elixir mindmaps."
   :group 'org
   :prefix "doom-org-mindmap-")
 
@@ -35,7 +36,7 @@
   :type 'integer
   :group 'doom-org-mindmap)
 
-(defcustom doom-org-mindmap-poll-interval 1000
+(defcustom doom-org-mindmap-poll-interval 3000
   "Polling interval in milliseconds for frontend updates."
   :type 'integer
   :group 'doom-org-mindmap)
@@ -46,6 +47,12 @@ When non-nil, only the narrowed region will be shown in the mindmap."
   :type 'boolean
   :group 'doom-org-mindmap)
 
+(defcustom doom-org-mindmap-static-root nil
+  "Override directory for static files (index.html).
+If nil, auto-detect from package location."
+  :type '(choice (const nil) directory)
+  :group 'doom-org-mindmap)
+
 ;;; Internal Variables
 
 (defvar +org-mindmap--current-buffer nil
@@ -54,110 +61,161 @@ When non-nil, only the narrowed region will be shown in the mindmap."
 (defvar +org-mindmap--server-running nil
   "Whether the mindmap server is running.")
 
-;; Capture the directory at load time
-(defvar +org-mindmap--static-root
-  (file-name-directory (or load-file-name buffer-file-name
-                           (locate-library "doom-org-mindmap")
-                           default-directory))
-  "Root directory for static files.")
+(defun +org-mindmap--get-static-root ()
+  "Get the directory containing static files."
+  (or doom-org-mindmap-static-root
+      (when load-file-name
+        (file-name-directory load-file-name))
+      (when (locate-library "doom-org-mindmap")
+        (file-name-directory (locate-library "doom-org-mindmap")))
+      (expand-file-name "~/development/tool/org-mindmap/"))
+  (or doom-org-mindmap-static-root
+      (when load-file-name
+        (file-name-directory load-file-name))
+      (when (locate-library "doom-org-mindmap")
+        (file-name-directory (locate-library "doom-org-mindmap")))
+      (expand-file-name "~/development/tool/org-mindmap/")))
 
-;;; Theme Color Extraction
+;;; Core Functions - Markdown Inline Conversion
 
-(defun +org-mindmap--color-to-hex (color)
-  "Convert COLOR (name or #hex) to a hex string."
-  (if (and color (not (string-empty-p color)))
-      (let ((rgb (color-values color)))
-        (if rgb
-            (format "#%02x%02x%02x"
-                    (/ (nth 0 rgb) 256)
-                    (/ (nth 1 rgb) 256)
-                    (/ (nth 2 rgb) 256))
-          color))
-    nil))
+(defun +org-mindmap--org-to-markdown-inline (text)
+  "Convert Org inline formatting in TEXT to Markdown."
+  (when text
+    (let ((result text))
+      ;; Links: [[url][description]] → [description](url)
+      (setq result
+            (replace-regexp-in-string
+             "\\[\\[\\([^]]+\\)\\]\\[\\([^]]+\\)\\]\\]" "[\\2](\\1)" result))
+      ;; Links without description: [[url]] → url
+      (setq result
+            (replace-regexp-in-string "\\[\\[\\([^]]+\\)\\]\\]" "\\1" result))
+      ;; Bold: *text* → **text**
+      (setq result
+            (replace-regexp-in-string "\\*\\([^*\n]+\\)\\*" "**\\1**" result))
+      ;; Italic: /text/ → *text*
+      (setq result (replace-regexp-in-string "/\\([^/\n]+\\)/" "*\\1*" result))
+      ;; Code: =text= or ~text~ → `text`
+      (setq result
+            (replace-regexp-in-string "[=~]\\([^=~\n]+\\)[=~]" "`\\1`" result))
+      ;; Strikethrough: +text+ → ~~text~~
+      (setq result
+            (replace-regexp-in-string "\\+\\([^+\n]+\\)\\+" "~~\\1~~" result))
+      result)))
 
-(defun +org-mindmap--get-theme-colors ()
-  "Extract colors from current Emacs theme for web frontend."
-  (let* ((bg (face-background 'default nil t))
-         (fg (face-foreground 'default nil t))
-         (keyword (face-foreground 'font-lock-keyword-face nil t))
-         (function (face-foreground 'font-lock-function-name-face nil t))
-         (string (face-foreground 'font-lock-string-face nil t))
-         (type (face-foreground 'font-lock-type-face nil t))
-         (constant (face-foreground 'font-lock-constant-face nil t))
-         (comment (face-foreground 'font-lock-comment-face nil t))
-         (link (face-foreground 'link nil t))
-         ;; Determine if dark mode based on background luminance
-         (bg-rgb (color-values bg))
-         (luminance (if bg-rgb
-                        (/ (+ (* 0.299 (nth 0 bg-rgb))
-                              (* 0.587 (nth 1 bg-rgb))
-                              (* 0.114 (nth 2 bg-rgb)))
-                           65535.0)
-                      0.1))
-         (is-dark (< luminance 0.5)))
-    `((background . ,(+org-mindmap--color-to-hex bg))
-      (foreground . ,(+org-mindmap--color-to-hex fg))
-      (isDark . ,is-dark)
-      (nodeColors . ,(vconcat
-                      (delq nil
-                            (list (+org-mindmap--color-to-hex keyword)
-                                  (+org-mindmap--color-to-hex function)
-                                  (+org-mindmap--color-to-hex string)
-                                  (+org-mindmap--color-to-hex type)
-                                  (+org-mindmap--color-to-hex constant)
-                                  (+org-mindmap--color-to-hex link)))))
-      (linkColor . ,(or (+org-mindmap--color-to-hex comment)
-                        (+org-mindmap--color-to-hex fg))))))
+;;; Core Functions - JSON Conversion for Mind-elixir
 
-;;; Core Functions
+(defun +org-mindmap--generate-node-id (begin)
+  "Generate unique node ID based on BEGIN position."
+  (format "node-%d" begin))
 
-(defun +org-mindmap--headline-to-node (headline)
-  "Convert an org HEADLINE element to a Markmap node structure.
-Includes :begin position for bidirectional navigation."
+(defun +org-mindmap--headline-to-json (headline)
+  "Convert HEADLINE to Mind-elixir JSON node structure."
   (let* ((title (org-element-property :raw-value headline))
          (begin (org-element-property :begin headline))
-         (children (org-element-contents headline))
-         (child-headlines (seq-filter
-                           (lambda (el)
-                             (eq (org-element-type el) 'headline))
-                           children))
-         (child-nodes (mapcar #'+org-mindmap--headline-to-node child-headlines)))
-    (if child-nodes
-        `((content . ,title)
-          (begin . ,begin)
-          (children . ,(vconcat child-nodes)))
-      `((content . ,title)
-        (begin . ,begin)
-        (children . [])))))
+         (id (+org-mindmap--generate-node-id begin))
+         (md-title (+org-mindmap--org-to-markdown-inline title))
+         (children-elements (org-element-contents headline))
+         (child-headlines
+          (seq-filter
+           (lambda (el)
+             (eq (org-element-type el) 'headline))
+           children-elements))
+         (tags (org-element-property :tags headline))
+         ;; Check for summary tag
+         (has-summary-tag (member "summary" tags))
+         ;; Check for SUMMARY property
+         (summary-label (org-element-property :SUMMARY headline))
+         (summary-range (org-element-property :SUMMARY_RANGE headline)))
+    `((topic . ,md-title)
+      (id . ,id)
+      (begin . ,begin)
+      (expanded . t)
+      (children . ,(mapcar #'+org-mindmap--headline-to-json child-headlines))
+      ,@
+      (when tags
+        `((tags
+           .
+           ,(vconcat
+             (seq-filter (lambda (tag) (not (string= tag "summary"))) tags)))))
+      ;; Summary info for frontend
+      ,@
+      (when (or has-summary-tag summary-label)
+        `((hasSummary . t)
+          ,@
+          (when summary-label
+            `((summaryLabel . ,summary-label)))
+          ,@
+          (when summary-range
+            (let* ((range-parts (split-string summary-range "-"))
+                   (start (string-to-number (car range-parts)))
+                   (end
+                    (when (cdr range-parts)
+                      (string-to-number (cadr range-parts)))))
+              `((summaryStart . ,start)
+                (summaryEnd . ,(or end (length child-headlines)))))))))))
+
+(defun +org-mindmap--extract-summaries (node)
+  "Extract summary definitions from NODE tree recursively."
+  (let ((summaries nil)
+        (has-summary (alist-get 'hasSummary node))
+        (node-id (alist-get 'id node))
+        (children (alist-get 'children node)))
+    ;; Check if this node has summary
+    (when has-summary
+      (let* ((label (or (alist-get 'summaryLabel node) "Summary"))
+             (start (or (alist-get 'summaryStart node) 0))
+             (end (or (alist-get 'summaryEnd node) (length children))))
+        (push `((id . ,(format "summary-%s" node-id))
+                (parent . ,node-id)
+                (start . ,start)
+                (end . ,end)
+                (label . ,label))
+              summaries)))
+    ;; Recurse into children
+    (dolist (child children)
+      (setq summaries
+            (append summaries (+org-mindmap--extract-summaries child))))
+    summaries))
 
 (defun +org-mindmap--get-json ()
-  "Parse current org buffer and return Markmap-compatible JSON string.
-Respects buffer narrowing when `doom-org-mindmap-use-narrow' is non-nil."
+  "Parse current org buffer and return JSON for Mind-elixir."
   (when (and +org-mindmap--current-buffer
              (buffer-live-p +org-mindmap--current-buffer))
     (with-current-buffer +org-mindmap--current-buffer
       (save-restriction
-        ;; If not using narrow mode, widen to show full buffer
         (unless doom-org-mindmap-use-narrow
           (widen))
         (let* ((tree (org-element-parse-buffer 'headline))
                (headlines (org-element-contents tree))
-               (top-headlines (seq-filter
-                               (lambda (el)
-                                 (eq (org-element-type el) 'headline))
-                               headlines))
-               (root-title (or (when (buffer-file-name)
-                                 (file-name-base (buffer-file-name)))
-                               (buffer-name)))
+               (top-headlines
+                (seq-filter
+                 (lambda (el) (eq (org-element-type el) 'headline)) headlines))
+               (root-title
+                (or (when (buffer-file-name)
+                      (file-name-base (buffer-file-name)))
+                    (buffer-name)))
                (narrowed-p (buffer-narrowed-p))
-               (root-node `((content . ,(if narrowed-p
-                                            (concat root-title " [focused]")
-                                          root-title))
-                            (begin . ,(point-min))
-                            (children . ,(vconcat
-                                          (mapcar #'+org-mindmap--headline-to-node
-                                                  top-headlines))))))
-          (json-encode root-node))))))
+               (title-text
+                (if narrowed-p
+                    (concat root-title " [focused]")
+                  root-title))
+               (root-id "root")
+               (root-node
+                `((topic . ,title-text)
+                  (id . ,root-id)
+                  (begin . ,(point-min))
+                  (expanded . t)
+                  (root . t)
+                  (children
+                   . ,(mapcar #'+org-mindmap--headline-to-json top-headlines))))
+               (summaries (+org-mindmap--extract-summaries root-node)))
+          (json-encode
+           `((topic . ,(alist-get 'topic root-node))
+             (id . ,(alist-get 'id root-node))
+             (begin . ,(alist-get 'begin root-node))
+             (expanded . t)
+             (children . ,(alist-get 'children root-node))
+             (summaries . ,(vconcat summaries)))))))))
 
 ;;; Navigation (Bidirectional Sync)
 
@@ -172,32 +230,65 @@ Respects buffer narrowing when `doom-org-mindmap-use-narrow' is non-nil."
             (goto-char pos)
             (org-reveal)
             (recenter))
-        ;; Buffer exists but no window, show it
         (pop-to-buffer +org-mindmap--current-buffer)
         (goto-char pos)
         (org-reveal)
         (recenter)))))
 
-;;; Servlets
+;;; Edit Sync - From Mindmap to Org
 
-(defun +org-mindmap--data-servlet (request)
-  "Servlet to return org structure as JSON for REQUEST."
-  (with-httpd-buffer request "application/json; charset=utf-8"
-    (insert (or (+org-mindmap--get-json) "{}"))))
+(defun +org-mindmap--update-headline (position old-topic new-topic)
+  "Update headline at POSITION from OLD-TOPIC to NEW-TOPIC."
+  (when (and +org-mindmap--current-buffer
+             (buffer-live-p +org-mindmap--current-buffer))
+    (with-current-buffer +org-mindmap--current-buffer
+      (save-excursion
+        (goto-char position)
+        (when (org-at-heading-p)
+          (let* ((element (org-element-at-point))
+                 (begin (org-element-property :begin element))
+                 (end (org-element-property :end element))
+                 (current-title (org-element-property :raw-value element)))
+            ;; Find and replace the headline text
+            (goto-char begin)
+            (when (re-search-forward (regexp-quote current-title) end t)
+              (replace-match new-topic t t))))))))
 
-(defun +org-mindmap--index-servlet (request)
-  "Servlet to serve the index.html for REQUEST."
-  (let ((index-file (expand-file-name "index.html" +org-mindmap--static-root)))
-    (if (file-exists-p index-file)
-        (with-httpd-buffer request "text/html; charset=utf-8"
-          (insert-file-contents index-file))
-      (httpd-error request 404 "index.html not found"))))
+(defun +org-mindmap--add-child-headline (parent-position topic)
+  "Add a child headline with TOPIC under headline at PARENT-POSITION."
+  (when (and +org-mindmap--current-buffer
+             (buffer-live-p +org-mindmap--current-buffer))
+    (with-current-buffer +org-mindmap--current-buffer
+      (save-excursion
+        (goto-char parent-position)
+        (org-end-of-subtree t t)
+        (unless (bolp)
+          (insert "\n"))
+        (let ((level (1+ (org-current-level))))
+          (insert (make-string level ?*) " " topic "\n"))))))
 
-(defun +org-mindmap--config-servlet (request)
-  "Servlet to return configuration for REQUEST."
-  (with-httpd-buffer request "application/json; charset=utf-8"
-    (insert (json-encode
-             `((pollInterval . ,doom-org-mindmap-poll-interval))))))
+(defun +org-mindmap--add-sibling-headline (position topic)
+  "Add a sibling headline with TOPIC after headline at POSITION."
+  (when (and +org-mindmap--current-buffer
+             (buffer-live-p +org-mindmap--current-buffer))
+    (with-current-buffer +org-mindmap--current-buffer
+      (save-excursion
+        (goto-char position)
+        (org-end-of-subtree t t)
+        (unless (bolp)
+          (insert "\n"))
+        (let ((level (org-current-level)))
+          (insert (make-string level ?*) " " topic "\n"))))))
+
+(defun +org-mindmap--delete-headline (position)
+  "Delete headline at POSITION."
+  (when (and +org-mindmap--current-buffer
+             (buffer-live-p +org-mindmap--current-buffer))
+    (with-current-buffer +org-mindmap--current-buffer
+      (save-excursion
+        (goto-char position)
+        (when (org-at-heading-p)
+          (org-cut-subtree))))))
 
 ;;; Server Management
 
@@ -205,28 +296,71 @@ Respects buffer narrowing when `doom-org-mindmap-use-narrow' is non-nil."
   "Start the mindmap HTTP server."
   (unless +org-mindmap--server-running
     (setq httpd-port doom-org-mindmap-port)
-    (message "Static root: %s" +org-mindmap--static-root)
-    ;; Register servlets
-    (defservlet* data "application/json" ()
-      (insert (or (+org-mindmap--get-json) "{}")))
-    (defservlet* config "application/json" ()
-      (insert (json-encode
-               `((pollInterval . ,doom-org-mindmap-poll-interval)))))
-    (defservlet* theme "application/json" ()
-      (insert (json-encode (+org-mindmap--get-theme-colors))))
-    (defservlet* goto text/plain (pos)
-      (when pos
-        (let ((position (string-to-number pos)))
-          (+org-mindmap--goto-position position)))
-      (insert "ok"))
-    (defservlet* mindmap "text/html" ()
-      (let ((index-file (expand-file-name "index.html" +org-mindmap--static-root)))
-        (when (file-exists-p index-file)
-          (insert-file-contents index-file))))
-    (httpd-start)
-    (setq +org-mindmap--server-running t)
-    (message "Mindmap server started on port %d" doom-org-mindmap-port)))
+    (let ((static-root (+org-mindmap--get-static-root)))
+      (message "Mindmap static root: %s" static-root)
 
+      (setq httpd-root static-root)
+
+      ;; JSON data endpoint
+      (defservlet*
+       data "application/json" () (insert (or (+org-mindmap--get-json) "{}")))
+
+      ;; Config
+      (defservlet*
+       config "application/json" ()
+       (insert
+        (json-encode `((pollInterval . ,doom-org-mindmap-poll-interval)))))
+
+      ;; Navigation - goto position
+      (defservlet*
+       goto text/plain (pos)
+       (let ((http-buffer (current-buffer)))
+         (when pos
+           (let ((position (string-to-number pos)))
+             (+org-mindmap--goto-position position)))
+         (set-buffer http-buffer)
+         (insert "ok")))
+
+      ;; Update headline
+      (defservlet*
+       update text/plain ()
+       (let* ((content (httpd-body httpd-request))
+              (data (json-read-from-string content))
+              (position (alist-get 'position data))
+              (old-topic (alist-get 'oldTopic data))
+              (new-topic (alist-get 'newTopic data)))
+         (when (and position new-topic)
+           (+org-mindmap--update-headline position old-topic new-topic)))
+       (insert "ok"))
+
+      ;; Add new node
+      (defservlet*
+       add-node text/plain ()
+       (let* ((content (httpd-body httpd-request))
+              (data (json-read-from-string content))
+              (parent-position (alist-get 'parentPosition data))
+              (topic (alist-get 'topic data))
+              (type (alist-get 'type data)))
+         (when (and parent-position topic)
+           (if (string= type "child")
+               (+org-mindmap--add-child-headline parent-position topic)
+             (+org-mindmap--add-sibling-headline parent-position topic))))
+       (insert "ok"))
+
+      ;; Delete node
+      (defservlet*
+       delete-node text/plain ()
+       (let* ((content (httpd-body httpd-request))
+              (data (json-read-from-string content))
+              (position (alist-get 'position data)))
+         (when position
+           (+org-mindmap--delete-headline position)))
+       (insert "ok"))
+
+
+      (httpd-start)
+      (setq +org-mindmap--server-running t)
+      (message "Mindmap server started on port %d" doom-org-mindmap-port))))
 (defun +org-mindmap--stop-server ()
   "Stop the mindmap HTTP server."
   (when +org-mindmap--server-running
@@ -238,22 +372,18 @@ Respects buffer narrowing when `doom-org-mindmap-use-narrow' is non-nil."
 
 ;;;###autoload
 (defun +org-mindmap/open ()
-  "Open the current org buffer as a mindmap.
-If xwidget-webkit is available, use it; otherwise open in external browser."
+  "Open the current org buffer as a mindmap."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "This command must be run in an org-mode buffer"))
   (setq +org-mindmap--current-buffer (current-buffer))
   (+org-mindmap--start-server)
-  (let ((url (format "http://localhost:%d/mindmap" doom-org-mindmap-port)))
-    ;; Copy URL to kill ring for convenience
+  (let ((url (format "http://localhost:%d/" doom-org-mindmap-port)))
     (kill-new url)
-    (if (and (featurep 'xwidget-internal)
-             (fboundp 'xwidget-webkit-browse-url))
+    (if (and (featurep 'xwidget-internal) (fboundp 'xwidget-webkit-browse-url))
         (progn
           (xwidget-webkit-browse-url url t)
           (message "Mindmap opened in xwidget-webkit"))
-      ;; External browser fallback
       (browse-url url)
       (message "Mindmap opened in browser. URL copied: %s" url))))
 
@@ -265,19 +395,14 @@ If xwidget-webkit is available, use it; otherwise open in external browser."
   (setq +org-mindmap--current-buffer nil))
 
 ;;;###autoload
-(defun +org-mindmap/refresh ()
-  "Manually refresh the mindmap by re-parsing the org buffer."
-  (interactive)
-  (when +org-mindmap--current-buffer
-    (message "Mindmap data refreshed")))
-
-;;;###autoload
 (defun +org-mindmap/toggle-narrow ()
   "Toggle whether mindmap respects buffer narrowing."
   (interactive)
   (setq doom-org-mindmap-use-narrow (not doom-org-mindmap-use-narrow))
   (message "Mindmap narrow mode: %s"
-           (if doom-org-mindmap-use-narrow "ON" "OFF")))
+           (if doom-org-mindmap-use-narrow
+               "ON"
+             "OFF")))
 
 (provide 'doom-org-mindmap)
 ;;; doom-org-mindmap.el ends here

@@ -1,0 +1,59 @@
+#+TITLE: Mind-elixir Test Document
+#+AUTHOR: Test
+
+* Project Overview :summary:
+This headline has the :summary: tag, so its children should be grouped.
+
+** Phase 1: Planning
+Initial planning and research phase.
+
+** Phase 2: Development
+Core development work.
+
+** Phase 3: Testing
+Quality assurance and testing.
+
+* Technical Details
+:PROPERTIES:
+:SUMMARY: Core components
+:SUMMARY_RANGE: 0-2
+:END:
+
+** Architecture
+System architecture overview.
+
+** Database
+Database design and implementation.
+
+** API Layer
+REST API endpoints.
+
+* Standard Section
+A normal section without summary.
+
+** Sub Item 1
+First sub item.
+
+** Sub Item 2
+Second sub item.
+
+** Sub Item 3
+Third sub item.
+
+* Features
+Various features of the project.
+
+** Feature A
+Description of feature A.
+
+*** Sub-feature A1
+Details about A1.
+
+*** Sub-feature A2
+Details about A2.
+
+** Feature B
+Description of feature B.
+
+** Feature C
+Description of feature C.
