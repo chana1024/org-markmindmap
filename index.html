@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Org Mindmap</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --fg-color: #e0e0e0;
+            --link-color: #5c6773;
+            --node-color-1: #51afef;
+            --node-color-2: #c678dd;
+            --node-color-3: #98be65;
+            --node-color-4: #ecbe7b;
+            --node-color-5: #ff6c6b;
+            --node-color-6: #a9a1e1;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            transition: background-color 0.3s ease;
+        }
+
+        #mindmap {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .markmap-node-text {
+            fill: var(--fg-color) !important;
+            cursor: pointer;
+            transition: fill 0.2s ease;
+        }
+
+        .markmap-node-text:hover {
+            fill: var(--node-color-1) !important;
+        }
+
+        .markmap-link {
+            stroke: var(--link-color) !important;
+            stroke-width: 1.5px;
+        }
+
+        .markmap-node-circle {
+            stroke-width: 1.5px;
+            cursor: pointer;
+        }
+
+        /* Loading state */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: var(--bg-color);
+            color: var(--fg-color);
+            font-size: 1.2rem;
+            z-index: 1000;
+            transition: opacity 0.3s ease;
+        }
+
+        .loading-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .status {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            padding: 6px 12px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #888;
+            font-size: 12px;
+            border-radius: 6px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #888;
+        }
+
+        .status-dot.connected {
+            background: #98be65;
+        }
+
+        .status-dot.disconnected {
+            background: #ff6c6b;
+        }
+
+        .focus-badge {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            padding: 6px 12px;
+            background: rgba(81, 175, 239, 0.2);
+            color: #51afef;
+            font-size: 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(81, 175, 239, 0.4);
+            display: none;
+        }
+
+        .focus-badge.visible {
+            display: block;
+        }
+
+        /* Click hint tooltip */
+        .click-hint {
+            position: fixed;
+            bottom: 50px;
+            right: 10px;
+            padding: 8px 14px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #aaa;
+            font-size: 11px;
+            border-radius: 6px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .click-hint.visible {
+            opacity: 1;
+        }
+    </style>
+    <!-- Markmap dependencies - use specific versions -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5/dist/d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.15.4/dist/browser/index.js"></script>
+</head>
+<body>
+    <div class="loading-overlay" id="loading">
+        <span>Loading mindmap...</span>
+    </div>
+    <div class="focus-badge" id="focusBadge">🎯 Focus Mode</div>
+    <svg id="mindmap"></svg>
+    <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+    </div>
+    <div class="click-hint" id="clickHint">💡 Click any node to jump to it in Emacs</div>
+
+    <script>
+        // Wait for markmap to be available
+        const { Markmap } = window.markmap;
+
+        let themeColors = null;
+        let nodePositions = new Map(); // Store begin positions for each node
+        let mm = null; // Markmap instance
+
+        let lastDataHash = '';
+        let pollInterval = 1000;
+
+        // Simple hash function to detect changes
+        function hashString(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            return hash.toString();
+        }
+
+        // Apply theme colors to CSS variables
+        function applyTheme(theme) {
+            if (!theme) return;
+            
+            const root = document.documentElement;
+            if (theme.background) {
+                root.style.setProperty('--bg-color', theme.background);
+            }
+            if (theme.foreground) {
+                root.style.setProperty('--fg-color', theme.foreground);
+            }
+            if (theme.linkColor) {
+                root.style.setProperty('--link-color', theme.linkColor);
+            }
+            if (theme.nodeColors) {
+                theme.nodeColors.forEach((color, i) => {
+                    root.style.setProperty(`--node-color-${i + 1}`, color);
+                });
+            }
+        }
+
+        // Convert server data to markmap format and track positions
+        function convertToMarkmapData(node, depth = 0) {
+            if (!node) return null;
+            
+            const nodeData = {
+                content: node.content || '',
+                children: (node.children || []).map((child) => 
+                    convertToMarkmapData(child, depth + 1)
+                ).filter(Boolean),
+                payload: {
+                    begin: node.begin
+                }
+            };
+            
+            // Store the begin position for navigation
+            if (node.begin !== undefined) {
+                nodePositions.set(node.content, node.begin);
+            }
+            
+            return nodeData;
+        }
+
+        // Navigate to position in Emacs
+        async function gotoEmacs(position) {
+            try {
+                await fetch(`/goto?pos=${position}`);
+            } catch (error) {
+                console.error('Failed to navigate:', error);
+            }
+        }
+
+        // Set up click handlers on the SVG
+        function setupClickHandlers() {
+            const svg = document.getElementById('mindmap');
+            svg.addEventListener('click', (event) => {
+                const target = event.target;
+                
+                // Check if clicked on text or circle
+                if (target.classList.contains('markmap-node-text') || 
+                    target.classList.contains('markmap-node-circle') ||
+                    target.closest('.markmap-node')) {
+                    
+                    // Find the text content
+                    let textElement = target;
+                    if (!target.classList.contains('markmap-node-text')) {
+                        const node = target.closest('.markmap-node');
+                        if (node) {
+                            textElement = node.querySelector('.markmap-node-text');
+                        }
+                    }
+                    
+                    if (textElement && textElement.textContent) {
+                        const content = textElement.textContent.trim();
+                        const position = nodePositions.get(content);
+                        
+                        if (position !== undefined) {
+                            gotoEmacs(position);
+                            
+                            // Visual feedback
+                            textElement.style.transition = 'fill 0.1s ease';
+                            const originalFill = textElement.style.fill;
+                            textElement.style.fill = '#51afef';
+                            setTimeout(() => {
+                                textElement.style.fill = originalFill || '';
+                            }, 200);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Fetch theme from Emacs
+        async function fetchTheme() {
+            try {
+                const response = await fetch('/theme');
+                if (response.ok) {
+                    themeColors = await response.json();
+                    applyTheme(themeColors);
+                }
+            } catch (error) {
+                console.log('Using default theme');
+            }
+        }
+
+        // Check for focus mode
+        function checkFocusMode(data) {
+            const focusBadge = document.getElementById('focusBadge');
+            if (data.content && data.content.includes('[focused]')) {
+                focusBadge.classList.add('visible');
+            } else {
+                focusBadge.classList.remove('visible');
+            }
+        }
+
+        // Create color function for markmap
+        function getColorFunction() {
+            const defaultColors = ['#51afef', '#c678dd', '#98be65', '#ecbe7b', '#ff6c6b', '#a9a1e1'];
+            return (node) => {
+                const depth = node.state?.depth || 0;
+                if (themeColors && themeColors.nodeColors && themeColors.nodeColors.length > 0) {
+                    return themeColors.nodeColors[depth % themeColors.nodeColors.length];
+                }
+                return defaultColors[depth % defaultColors.length];
+            };
+        }
+
+        // Fetch data and update mindmap
+        async function fetchAndUpdate() {
+            try {
+                const response = await fetch('/data');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const text = await response.text();
+                
+                // Check if response is empty or just {}
+                if (!text || text === '{}') {
+                    console.log('No data yet');
+                    return;
+                }
+                
+                const dataHash = hashString(text);
+
+                // Only update if data changed
+                if (dataHash !== lastDataHash) {
+                    lastDataHash = dataHash;
+                    const data = JSON.parse(text);
+                    
+                    console.log('Received data:', data);
+                    
+                    // Check focus mode
+                    checkFocusMode(data);
+                    
+                    // Clear and rebuild position map
+                    nodePositions.clear();
+                    const markmapData = convertToMarkmapData(data);
+                    
+                    console.log('Converted data:', markmapData);
+                    
+                    if (markmapData) {
+                        const svg = document.getElementById('mindmap');
+                        
+                        // Initialize or update markmap
+                        if (!mm) {
+                            mm = Markmap.create(svg, {
+                                color: getColorFunction(),
+                                paddingX: 16,
+                                autoFit: true,
+                                duration: 300,
+                            }, markmapData);
+                        } else {
+                            mm.setData(markmapData);
+                            mm.fit();
+                        }
+                        
+                        // Hide loading overlay on first successful load
+                        document.getElementById('loading').classList.add('hidden');
+                    }
+                }
+                
+                // Update status
+                document.getElementById('statusDot').classList.add('connected');
+                document.getElementById('statusDot').classList.remove('disconnected');
+                document.getElementById('statusText').textContent = 'Connected';
+                
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('statusDot').classList.remove('connected');
+                document.getElementById('statusDot').classList.add('disconnected');
+                document.getElementById('statusText').textContent = 'Disconnected';
+            }
+        }
+
+        // Fetch config and start polling
+        async function init() {
+            console.log('Initializing mindmap...');
+            console.log('Markmap available:', !!window.markmap);
+            
+            // Fetch theme first
+            await fetchTheme();
+            
+            try {
+                const configResponse = await fetch('/config');
+                if (configResponse.ok) {
+                    const config = await configResponse.json();
+                    pollInterval = config.pollInterval || 1000;
+                }
+            } catch (e) {
+                console.log('Using default poll interval');
+            }
+
+            // Set up click handlers
+            setupClickHandlers();
+
+            // Show click hint briefly
+            const clickHint = document.getElementById('clickHint');
+            setTimeout(() => {
+                clickHint.classList.add('visible');
+                setTimeout(() => {
+                    clickHint.classList.remove('visible');
+                }, 4000);
+            }, 2000);
+
+            // Initial fetch
+            await fetchAndUpdate();
+
+            // Start polling for data
+            setInterval(fetchAndUpdate, pollInterval);
+            
+            // Refresh theme periodically (every 5 seconds)
+            setInterval(fetchTheme, 5000);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (mm) mm.fit();
+        });
+
+        // Start the application
+        init();
+    </script>
+</body>
+</html>
