@@ -60,6 +60,16 @@ When nil, opens in the current window."
   :type 'boolean
   :group 'doom-org-mindmap)
 
+(defcustom doom-org-mindmap-include-items t
+  "Whether to include list items as nodes in the mindmap."
+  :type 'boolean
+  :group 'doom-org-mindmap)
+
+(defcustom doom-org-mindmap-include-content t
+  "Whether to include content (paragraphs) as nodes in the mindmap."
+  :type 'boolean
+  :group 'doom-org-mindmap)
+
 ;;; Internal Variables
 
 (defvar +org-mindmap--current-buffer nil
@@ -129,18 +139,117 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
   "Generate unique node ID based on BEGIN position."
   (format "node-%d" begin))
 
+(defun +org-mindmap--process-element (element)
+  "Convert an org ELEMENT to a JSON structure if applicable."
+  (let ((type (org-element-type element)))
+    (cond
+     ((eq type 'headline) (+org-mindmap--headline-to-json element))
+     ((and doom-org-mindmap-include-items (eq type 'plain-list))
+      (+org-mindmap--list-to-json element))
+     ((and doom-org-mindmap-include-content (eq type 'paragraph))
+      (+org-mindmap--paragraph-to-json element))
+     ((eq type 'section) ;; Recursively process section content
+      (+org-mindmap--container-to-json-list element))
+     (t nil))))
+
+(defun +org-mindmap--container-to-json-list (container)
+  "Process children of CONTAINER and return list of JSON nodes."
+  (let ((children (org-element-contents container)))
+    (seq-filter #'identity
+                (mapcar #'+org-mindmap--process-element children))))
+
+(defun +org-mindmap--list-to-json (plain-list)
+  "Convert PLAIN-LIST to a list of item nodes."
+  ;; A plain-list is not a node itself, but returns a list of item nodes
+  ;; Since our structure expects a single node return or list, we need to handle this.
+  ;; However, our mapcar logic expects one node per element.
+  ;; Wait, a plain-list element contains items. We should probably return the items as siblings?
+  ;; But the current structure (children array) expects a list of nodes.
+  ;; Let's make this function return a LIST of nodes, and the caller handles flattening.
+  ;; Actually, let's treat the list itself as a transparency and return its items.
+  ;; But +org-mindmap--process-element is expected to return A NODE Usually.
+  ;; Let's change +org-mindmap--process-element to return a LIST of nodes.
+  nil) ;; Re-thinking strategy below
+
+(defun +org-mindmap--process-children (element)
+  "Process all children of ELEMENT and return a flat list of JSON nodes."
+  (let ((contents (org-element-contents element))
+        (result nil))
+    (dolist (child contents)
+      (let ((type (org-element-type child)))
+        (cond
+         ((eq type 'headline)
+          (push (+org-mindmap--headline-to-json child) result))
+         ((eq type 'section)
+          (setq result (append (+org-mindmap--process-children child) result)))
+         ((and doom-org-mindmap-include-items (eq type 'plain-list))
+          (setq result (append (+org-mindmap--process-list child) result)))
+         ((and doom-org-mindmap-include-content (eq type 'paragraph))
+          (push (+org-mindmap--paragraph-to-json child) result)))))
+    (nreverse result)))
+
+(defun +org-mindmap--process-list (plain-list)
+  "Convert PLAIN-LIST to a list of item nodes."
+  (let ((items (org-element-contents plain-list))
+        (result nil))
+    (dolist (item items)
+      (when (eq (org-element-type item) 'item)
+        (push (+org-mindmap--item-to-json item) result)))
+    (nreverse result)))
+
+(defun +org-mindmap--item-to-json (item)
+  "Convert list ITEM to JSON node."
+  (let* ((tag (org-element-property :tag item))
+         (bullet (org-element-property :bullet item))
+         ;; Content of item is tricky, it's mixed with children
+         ;; We need to extract the first paragraph or clean text?
+         ;; Actually item contents are elements too.
+         (contents (org-element-contents item))
+         (begin (org-element-property :begin item))
+         (id (+org-mindmap--generate-node-id begin))
+         (text (if tag (format "%s %s" bullet tag) bullet)) ;; Fallback title if no paragraph
+         ;; Find first paragraph for title?
+         (first-para (seq-find (lambda (x) (eq (org-element-type x) 'paragraph)) contents))
+         (title (if first-para
+                    (buffer-substring-no-properties
+                     (org-element-property :contents-begin first-para)
+                     (org-element-property :contents-end first-para))
+                  text))
+         ;; Clean title
+         (clean-title (string-trim (or title "")))
+         (md-title (+org-mindmap--org-to-markdown-inline clean-title))
+         ;; Children
+         (children (+org-mindmap--process-children item)))
+    `((topic . ,md-title)
+      (id . ,id)
+      (begin . ,begin)
+      (expanded . t)
+      (children . ,children))))
+
+(defun +org-mindmap--paragraph-to-json (paragraph)
+  "Convert PARAGRAPH to JSON node."
+  (let* ((begin (org-element-property :begin paragraph))
+         (id (+org-mindmap--generate-node-id begin))
+         (text (buffer-substring-no-properties
+                (org-element-property :contents-begin paragraph)
+                (org-element-property :contents-end paragraph)))
+         (clean-text (string-trim text))
+         (md-text (+org-mindmap--org-to-markdown-inline clean-text)))
+    (if (> (length clean-text) 0)
+        `((topic . ,md-text)
+          (id . ,id)
+          (begin . ,begin)
+          ;; Paragraphs are usually leaves, but we handle it generally
+          (children . []))
+      nil)))
+
 (defun +org-mindmap--headline-to-json (headline)
   "Convert HEADLINE to Mind-elixir JSON node structure."
   (let* ((title (org-element-property :raw-value headline))
          (begin (org-element-property :begin headline))
          (id (+org-mindmap--generate-node-id begin))
          (md-title (+org-mindmap--org-to-markdown-inline title))
-         (children-elements (org-element-contents headline))
-         (child-headlines
-          (seq-filter
-           (lambda (el)
-             (eq (org-element-type el) 'headline))
-           children-elements))
+         (children (+org-mindmap--process-children headline))
          (tags (org-element-property :tags headline))
          ;; Check for summary tag
          (has-summary-tag (member "summary" tags))
@@ -151,7 +260,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (id . ,id)
       (begin . ,begin)
       (expanded . t)
-      (children . ,(mapcar #'+org-mindmap--headline-to-json child-headlines))
+      (children . ,children)
       ,@
       (when tags
         `((tags
@@ -206,11 +315,8 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (save-restriction
         (unless doom-org-mindmap-use-narrow
           (widen))
-        (let* ((tree (org-element-parse-buffer 'headline))
-               (headlines (org-element-contents tree))
-               (top-headlines
-                (seq-filter
-                 (lambda (el) (eq (org-element-type el) 'headline)) headlines))
+        (let* ((tree (org-element-parse-buffer)) ;; Full parse
+               (root-children (+org-mindmap--process-children tree))
                (file-title
                 (car (cdr (assoc "TITLE" (org-collect-keywords '("TITLE"))))))
                (root-title
@@ -230,8 +336,8 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
                   (begin . ,(point-min))
                   (expanded . t)
                   (root . t)
-                  (children
-                   . ,(mapcar #'+org-mindmap--headline-to-json top-headlines))))
+                  (root . t)
+                  (children . ,root-children))
                (summaries (+org-mindmap--extract-summaries root-node)))
           (json-encode
            `((topic . ,(alist-get 'topic root-node))
@@ -333,7 +439,22 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (defservlet*
        config "application/json" ()
        (insert
-        (json-encode `((pollInterval . ,doom-org-mindmap-poll-interval)))))
+        (json-encode `((pollInterval . ,doom-org-mindmap-poll-interval)
+                       (includeItems . ,doom-org-mindmap-include-items)
+                       (includeContent . ,doom-org-mindmap-include-content)))))
+
+      ;; Update config
+      (defservlet*
+       update-config text/plain ()
+       (let* ((content (httpd-body httpd-request))
+              (data (json-read-from-string content))
+              (items (alist-get 'includeItems data))
+              (content-flag (alist-get 'includeContent data)))
+         (unless (eq items nil)
+           (setq doom-org-mindmap-include-items items))
+         (unless (eq content-flag nil)
+           (setq doom-org-mindmap-include-content content-flag))
+         (insert "ok")))
 
       ;; Navigation - goto position
       (defservlet*

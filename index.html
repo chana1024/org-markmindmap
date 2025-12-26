@@ -179,6 +179,31 @@
             background: rgba(0, 0, 0, 0.8);
         }
 
+        /* Toggle switches */
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 2px 10px;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #ccc;
+            font-size: 11px;
+            user-select: none;
+        }
+
+        .toggle-group input[type="checkbox"] {
+            cursor: pointer;
+            width: 14px;
+            height: 14px;
+            accent-color: #51afef;
+        }
+
+        .toggle-group label {
+            cursor: pointer;
+        }
+
         /* Click hint */
         .click-hint {
             position: fixed;
@@ -222,6 +247,14 @@
     <div class="focus-badge" id="focusBadge">🎯 Focus Mode</div>
     
     <div class="controls-container">
+        <div class="toggle-group">
+            <input type="checkbox" id="includeItems" onchange="updateOrgConfig()">
+            <label for="includeItems">Items</label>
+        </div>
+        <div class="toggle-group">
+            <input type="checkbox" id="includeContent" onchange="updateOrgConfig()">
+            <label for="includeContent">Content</label>
+        </div>
         <div class="selector-group">
             <select id="layoutSelect" onchange="changeLayout(this.value)">
                 <option value="right">Right (Left to Right)</option>
@@ -457,6 +490,30 @@
                     mind.toCenter();
                 }
             }, 100);
+        };
+
+        // Update Org configuration on server
+        window.updateOrgConfig = async function() {
+            const includeItems = document.getElementById('includeItems').checked;
+            const includeContent = document.getElementById('includeContent').checked;
+            
+            try {
+                const response = await fetch('/update-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        includeItems: includeItems,
+                        includeContent: includeContent
+                    })
+                });
+                if (response.ok) {
+                    showSyncIndicator();
+                    // Clear hash to force a refresh on next poll
+                    lastDataHash = '';
+                }
+            } catch (error) {
+                console.error('Failed to update config:', error);
+            }
         };
 
         // Get Mind-elixir theme config
@@ -766,6 +823,13 @@
                 if (configResponse.ok) {
                     const config = await configResponse.json();
                     pollInterval = config.pollInterval || 1000;
+                    
+                    if (config.includeItems !== undefined) {
+                        document.getElementById('includeItems').checked = config.includeItems;
+                    }
+                    if (config.includeContent !== undefined) {
+                        document.getElementById('includeContent').checked = config.includeContent;
+                    }
                 }
             } catch (e) {}
 
