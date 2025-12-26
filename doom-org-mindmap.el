@@ -137,7 +137,9 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
 
 (defun +org-mindmap--generate-node-id (begin)
   "Generate unique node ID based on BEGIN position."
-  (format "node-%s" (or begin (random 1000000))))
+  (if begin
+      (format "node-%s" begin)
+    (format "node-rand-%06d" (random 1000000))))
 
 (defun +org-mindmap--process-element (element)
   "Convert an org ELEMENT to a JSON structure if applicable."
@@ -207,14 +209,18 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          (contents (org-element-contents item))
          (begin (org-element-property :begin item))
          (id (+org-mindmap--generate-node-id begin))
-         (text (if tag (format "%s %s" bullet tag) bullet)) ;; Fallback title if no paragraph
+         (text (cond
+                ((and bullet tag) (format "%s %s" bullet tag))
+                (bullet (format "%s" bullet))
+                (tag (format "%s" tag))
+                (t ""))) ;; Fallback title if no paragraph
          ;; Find first paragraph for title?
          (first-para (seq-find (lambda (x) (eq (org-element-type x) 'paragraph)) contents))
          (cb (and first-para (org-element-property :contents-begin first-para)))
          (ce (and first-para (org-element-property :contents-end first-para)))
          (title (if (and cb ce)
                     (buffer-substring-no-properties cb ce)
-                  (or text "")))
+                  text))
          ;; Clean title
          (clean-title (string-trim (or title "")))
          (md-title (+org-mindmap--org-to-markdown-inline clean-title))
@@ -338,8 +344,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
                   (begin . ,(point-min))
                   (expanded . t)
                   (root . t)
-                  (root . t)
-                  (children . ,root-children))
+                  (children . ,root-children)))
                (summaries (+org-mindmap--extract-summaries root-node)))
           (json-encode
            `((topic . ,(alist-get 'topic root-node))
