@@ -61,6 +61,15 @@ If nil, auto-detect from package location."
 (defvar +org-mindmap--server-running nil
   "Whether the mindmap server is running.")
 
+(defun +org-mindmap--on-buffer-switch ()
+  "Update current buffer when switching to an org-mode buffer.
+ Only triggers when the mindmap server is running."
+  (when (and +org-mindmap--server-running
+             (derived-mode-p 'org-mode)
+             (not (minibufferp))
+             (not (string-prefix-p " " (buffer-name))))
+    (setq +org-mindmap--current-buffer (current-buffer))))
+
 (defun +org-mindmap--get-static-root ()
   "Get the directory containing static files."
   (or doom-org-mindmap-static-root
@@ -360,12 +369,16 @@ If nil, auto-detect from package location."
 
       (httpd-start)
       (setq +org-mindmap--server-running t)
+      ;; Add hook to track buffer switches to org buffers
+      (add-hook 'buffer-list-update-hook #'+org-mindmap--on-buffer-switch)
       (message "Mindmap server started on port %d" doom-org-mindmap-port))))
 (defun +org-mindmap--stop-server ()
   "Stop the mindmap HTTP server."
   (when +org-mindmap--server-running
     (httpd-stop)
     (setq +org-mindmap--server-running nil)
+    ;; Remove buffer switch hook
+    (remove-hook 'buffer-list-update-hook #'+org-mindmap--on-buffer-switch)
     (message "Mindmap server stopped")))
 
 ;;; Interactive Commands
