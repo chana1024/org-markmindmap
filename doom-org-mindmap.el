@@ -199,8 +199,11 @@ If nil, auto-detect from package location."
                (top-headlines
                 (seq-filter
                  (lambda (el) (eq (org-element-type el) 'headline)) headlines))
+               (file-title
+                (car (cdr (assoc "TITLE" (org-collect-keywords '("TITLE"))))))
                (root-title
-                (or (when (buffer-file-name)
+                (or file-title
+                    (when (buffer-file-name)
                       (file-name-base (buffer-file-name)))
                     (buffer-name)))
                (narrowed-p (buffer-narrowed-p))
