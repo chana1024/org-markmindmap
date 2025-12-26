@@ -68,14 +68,19 @@ When nil, opens in the current window."
 (defvar +org-mindmap--server-running nil
   "Whether the mindmap server is running.")
 
-(defun +org-mindmap--on-buffer-switch ()
+(defun +org-mindmap--on-buffer-switch (&optional _frame)
   "Update current buffer when switching to an org-mode buffer.
- Only triggers when the mindmap server is running."
-  (when (and +org-mindmap--server-running
-             (derived-mode-p 'org-mode)
-             (not (minibufferp))
-             (not (string-prefix-p " " (buffer-name))))
-    (setq +org-mindmap--current-buffer (current-buffer))))
+Only triggers when the mindmap server is running.
+FRAME argument is ignored (required by `window-buffer-change-functions')."
+  (ignore-errors
+    (when (and +org-mindmap--server-running
+               (not (minibufferp))
+               (not (string-prefix-p " " (buffer-name)))
+               (not (string-prefix-p "*xwidget" (buffer-name)))
+               (not (eq major-mode 'xwidget-webkit-mode))
+               (buffer-file-name)
+               (derived-mode-p 'org-mode))
+      (setq +org-mindmap--current-buffer (current-buffer)))))
 
 (defun +org-mindmap--get-static-root ()
   "Get the directory containing static files."
@@ -380,7 +385,7 @@ When nil, opens in the current window."
       (httpd-start)
       (setq +org-mindmap--server-running t)
       ;; Add hook to track buffer switches to org buffers
-      (add-hook 'buffer-list-update-hook #'+org-mindmap--on-buffer-switch)
+      (add-hook 'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
       (message "Mindmap server started on port %d" doom-org-mindmap-port))))
 (defun +org-mindmap--stop-server ()
   "Stop the mindmap HTTP server."
@@ -388,7 +393,7 @@ When nil, opens in the current window."
     (httpd-stop)
     (setq +org-mindmap--server-running nil)
     ;; Remove buffer switch hook
-    (remove-hook 'buffer-list-update-hook #'+org-mindmap--on-buffer-switch)
+    (remove-hook 'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
     (message "Mindmap server stopped")))
 
 ;;; Interactive Commands
