@@ -137,7 +137,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
 
 (defun +org-mindmap--generate-node-id (begin)
   "Generate unique node ID based on BEGIN position."
-  (format "node-%d" begin))
+  (format "node-%s" (or begin (random 1000000))))
 
 (defun +org-mindmap--process-element (element)
   "Convert an org ELEMENT to a JSON structure if applicable."
@@ -210,11 +210,11 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          (text (if tag (format "%s %s" bullet tag) bullet)) ;; Fallback title if no paragraph
          ;; Find first paragraph for title?
          (first-para (seq-find (lambda (x) (eq (org-element-type x) 'paragraph)) contents))
-         (title (if first-para
-                    (buffer-substring-no-properties
-                     (org-element-property :contents-begin first-para)
-                     (org-element-property :contents-end first-para))
-                  text))
+         (cb (and first-para (org-element-property :contents-begin first-para)))
+         (ce (and first-para (org-element-property :contents-end first-para)))
+         (title (if (and cb ce)
+                    (buffer-substring-no-properties cb ce)
+                  (or text "")))
          ;; Clean title
          (clean-title (string-trim (or title "")))
          (md-title (+org-mindmap--org-to-markdown-inline clean-title))
@@ -229,10 +229,12 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
 (defun +org-mindmap--paragraph-to-json (paragraph)
   "Convert PARAGRAPH to JSON node."
   (let* ((begin (org-element-property :begin paragraph))
+         (cb (org-element-property :contents-begin paragraph))
+         (ce (org-element-property :contents-end paragraph))
          (id (+org-mindmap--generate-node-id begin))
-         (text (buffer-substring-no-properties
-                (org-element-property :contents-begin paragraph)
-                (org-element-property :contents-end paragraph)))
+         (text (if (and cb ce)
+                   (buffer-substring-no-properties cb ce)
+                 ""))
          (clean-text (string-trim text))
          (md-text (+org-mindmap--org-to-markdown-inline clean-text)))
     (if (> (length clean-text) 0)
