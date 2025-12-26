@@ -53,6 +53,13 @@ If nil, auto-detect from package location."
   :type '(choice (const nil) directory)
   :group 'doom-org-mindmap)
 
+(defcustom doom-org-mindmap-split-window t
+  "Whether to open mindmap in a new window (split).
+When non-nil, splits the current window and displays mindmap in the new window.
+When nil, opens in the current window."
+  :type 'boolean
+  :group 'doom-org-mindmap)
+
 ;;; Internal Variables
 
 (defvar +org-mindmap--current-buffer nil
@@ -398,8 +405,11 @@ If nil, auto-detect from package location."
     (kill-new url)
     (if (and (featurep 'xwidget-internal) (fboundp 'xwidget-webkit-browse-url))
         (progn
+          (when doom-org-mindmap-split-window
+            (select-window (split-window-right)))
           (xwidget-webkit-browse-url url t)
           (message "Mindmap opened in xwidget-webkit"))
+      ;; External browser - split window not applicable
       (browse-url url)
       (message "Mindmap opened in browser. URL copied: %s" url))))
 
