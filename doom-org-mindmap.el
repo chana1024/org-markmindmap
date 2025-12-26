@@ -60,12 +60,12 @@ When nil, opens in the current window."
   :type 'boolean
   :group 'doom-org-mindmap)
 
-(defcustom doom-org-mindmap-include-items t
+(defcustom doom-org-mindmap-include-items nil
   "Whether to include list items as nodes in the mindmap."
   :type 'boolean
   :group 'doom-org-mindmap)
 
-(defcustom doom-org-mindmap-include-content t
+(defcustom doom-org-mindmap-include-content nil
   "Whether to include content (paragraphs) as nodes in the mindmap."
   :type 'boolean
   :group 'doom-org-mindmap)
@@ -141,37 +141,6 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (format "node-%s" begin)
     (format "node-rand-%06d" (random 1000000))))
 
-(defun +org-mindmap--process-element (element)
-  "Convert an org ELEMENT to a JSON structure if applicable."
-  (let ((type (org-element-type element)))
-    (cond
-     ((eq type 'headline) (+org-mindmap--headline-to-json element))
-     ((and doom-org-mindmap-include-items (eq type 'plain-list))
-      (+org-mindmap--list-to-json element))
-     ((and doom-org-mindmap-include-content (eq type 'paragraph))
-      (+org-mindmap--paragraph-to-json element))
-     ((eq type 'section) ;; Recursively process section content
-      (+org-mindmap--container-to-json-list element))
-     (t nil))))
-
-(defun +org-mindmap--container-to-json-list (container)
-  "Process children of CONTAINER and return list of JSON nodes."
-  (let ((children (org-element-contents container)))
-    (seq-filter #'identity
-                (mapcar #'+org-mindmap--process-element children))))
-
-(defun +org-mindmap--list-to-json (plain-list)
-  "Convert PLAIN-LIST to a list of item nodes."
-  ;; A plain-list is not a node itself, but returns a list of item nodes
-  ;; Since our structure expects a single node return or list, we need to handle this.
-  ;; However, our mapcar logic expects one node per element.
-  ;; Wait, a plain-list element contains items. We should probably return the items as siblings?
-  ;; But the current structure (children array) expects a list of nodes.
-  ;; Let's make this function return a LIST of nodes, and the caller handles flattening.
-  ;; Actually, let's treat the list itself as a transparency and return its items.
-  ;; But +org-mindmap--process-element is expected to return A NODE Usually.
-  ;; Let's change +org-mindmap--process-element to return a LIST of nodes.
-  nil) ;; Re-thinking strategy below
 
 (defun +org-mindmap--process-children (element)
   "Process all children of ELEMENT and return a flat list of JSON nodes."
@@ -209,18 +178,25 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          (contents (org-element-contents item))
          (begin (org-element-property :begin item))
          (id (+org-mindmap--generate-node-id begin))
-         (text (cond
-                ((and bullet tag) (format "%s %s" bullet tag))
-                (bullet (format "%s" bullet))
-                (tag (format "%s" tag))
-                (t ""))) ;; Fallback title if no paragraph
+         (text
+          (cond
+           ((and bullet tag)
+            (format "%s %s" bullet tag))
+           (bullet
+            (format "%s" bullet))
+           (tag
+            (format "%s" tag))
+           (t
+            ""))) ;; Fallback title if no paragraph
          ;; Find first paragraph for title?
-         (first-para (seq-find (lambda (x) (eq (org-element-type x) 'paragraph)) contents))
+         (first-para
+          (seq-find (lambda (x) (eq (org-element-type x) 'paragraph)) contents))
          (cb (and first-para (org-element-property :contents-begin first-para)))
          (ce (and first-para (org-element-property :contents-end first-para)))
-         (title (if (and cb ce)
-                    (buffer-substring-no-properties cb ce)
-                  text))
+         (title
+          (if (and cb ce)
+              (buffer-substring-no-properties cb ce)
+            text))
          ;; Clean title
          (clean-title (string-trim (or title "")))
          (md-title (+org-mindmap--org-to-markdown-inline clean-title))
@@ -238,15 +214,15 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          (cb (org-element-property :contents-begin paragraph))
          (ce (org-element-property :contents-end paragraph))
          (id (+org-mindmap--generate-node-id begin))
-         (text (if (and cb ce)
-                   (buffer-substring-no-properties cb ce)
-                 ""))
+         (text
+          (if (and cb ce)
+              (buffer-substring-no-properties cb ce)
+            ""))
          (clean-text (string-trim text))
          (md-text (+org-mindmap--org-to-markdown-inline clean-text)))
     (if (> (length clean-text) 0)
         `((topic . ,md-text)
-          (id . ,id)
-          (begin . ,begin)
+          (id . ,id) (begin . ,begin)
           ;; Paragraphs are usually leaves, but we handle it generally
           (children . []))
       nil)))
@@ -265,11 +241,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          (summary-label (org-element-property :SUMMARY headline))
          (summary-range (org-element-property :SUMMARY_RANGE headline)))
     `((topic . ,md-title)
-      (id . ,id)
-      (begin . ,begin)
-      (expanded . t)
-      (children . ,children)
-      ,@
+      (id . ,id) (begin . ,begin) (expanded . t) (children . ,children) ,@
       (when tags
         `((tags
            .
@@ -446,22 +418,52 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (defservlet*
        config "application/json" ()
        (insert
-        (json-encode `((pollInterval . ,doom-org-mindmap-poll-interval)
-                       (includeItems . ,doom-org-mindmap-include-items)
-                       (includeContent . ,doom-org-mindmap-include-content)))))
+        (json-encode
+         `((pollInterval . ,doom-org-mindmap-poll-interval)
+           (includeItems . ,doom-org-mindmap-include-items)
+           (includeContent . ,doom-org-mindmap-include-content)))))
 
       ;; Update config
       (defservlet*
        update-config text/plain ()
-       (let* ((content (httpd-body httpd-request))
-              (data (json-read-from-string content))
-              (items (alist-get 'includeItems data))
-              (content-flag (alist-get 'includeContent data)))
-         (unless (eq items nil)
-           (setq doom-org-mindmap-include-items items))
-         (unless (eq content-flag nil)
-           (setq doom-org-mindmap-include-content content-flag))
-         (insert "ok")))
+       (let* ((raw-content (assoc-default "Content" httpd-request))
+              (content
+               (if (listp raw-content)
+                   (car raw-content)
+                 raw-content))
+              (data
+               (when (and (stringp content) (not (string-empty-p content)))
+                 (condition-case nil
+                     (json-read-from-string content)
+                   (error
+                    nil)))))
+
+         (if (not data)
+             (insert "error: invalid json")
+
+           ;; 定义一个内部辅助函数，将 :json-false 转为 nil
+           (cl-flet
+            ((normalize-bool
+              (val)
+              (if (eq val :json-false)
+                  nil
+                val)))
+            (let ((items (normalize-bool (alist-get 'includeItems data)))
+                  (content-flag
+                   (normalize-bool (alist-get 'includeContent data))))
+
+              ;; 检查 key 是否存在，而不仅仅是检查值
+              (unless (null (assoc 'includeItems data))
+                (customize-set-variable 'doom-org-mindmap-include-items items))
+
+              (unless (null (assoc 'includeContent data))
+                (customize-set-variable
+                 'doom-org-mindmap-include-content content-flag))
+
+              (message "Mindmap Config Updated: items=%s, content=%s"
+                       items
+                       content-flag)
+              (insert "ok"))))))
 
       ;; Navigation - goto position
       (defservlet*
@@ -513,7 +515,8 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (httpd-start)
       (setq +org-mindmap--server-running t)
       ;; Add hook to track buffer switches to org buffers
-      (add-hook 'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
+      (add-hook
+       'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
       (message "Mindmap server started on port %d" doom-org-mindmap-port))))
 (defun +org-mindmap--stop-server ()
   "Stop the mindmap HTTP server."
@@ -521,7 +524,8 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
     (httpd-stop)
     (setq +org-mindmap--server-running nil)
     ;; Remove buffer switch hook
-    (remove-hook 'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
+    (remove-hook
+     'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
     (message "Mindmap server stopped")))
 
 ;;; Interactive Commands

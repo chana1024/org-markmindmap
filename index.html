@@ -510,6 +510,7 @@
                     showSyncIndicator();
                     // Clear hash to force a refresh on next poll
                     lastDataHash = '';
+                    fetchAndUpdate();
                 }
             } catch (error) {
                 console.error('Failed to update config:', error);
