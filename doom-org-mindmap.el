@@ -152,7 +152,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          ((eq type 'headline)
           (push (+org-mindmap--headline-to-json child) result))
          ((eq type 'section)
-          (setq result (append (+org-mindmap--process-children child) result)))
+          (setq result (append (nreverse (+org-mindmap--process-children child)) result)))
          ((and doom-org-mindmap-include-items (eq type 'plain-list))
           (setq result (append (+org-mindmap--process-list child) result)))
          ((and doom-org-mindmap-include-content (eq type 'paragraph))
@@ -166,7 +166,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
     (dolist (item items)
       (when (eq (org-element-type item) 'item)
         (push (+org-mindmap--item-to-json item) result)))
-    (nreverse result)))
+    result))
 
 (defun +org-mindmap--item-to-json (item)
   "Convert list ITEM to JSON node."
@@ -293,38 +293,41 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
              (buffer-live-p +org-mindmap--current-buffer))
     (with-current-buffer +org-mindmap--current-buffer
       (save-restriction
-        (unless doom-org-mindmap-use-narrow
-          (widen))
-        (let* ((tree (org-element-parse-buffer)) ;; Full parse
-               (root-children (+org-mindmap--process-children tree))
-               (file-title
-                (car (cdr (assoc "TITLE" (org-collect-keywords '("TITLE"))))))
-               (root-title
-                (or file-title
-                    (when (buffer-file-name)
-                      (file-name-base (buffer-file-name)))
-                    (buffer-name)))
-               (narrowed-p (buffer-narrowed-p))
-               (title-text
-                (if narrowed-p
-                    (concat root-title " [focused]")
-                  root-title))
-               (root-id "root")
-               (root-node
-                `((topic . ,title-text)
-                  (id . ,root-id)
-                  (begin . ,(point-min))
-                  (expanded . t)
-                  (root . t)
-                  (children . ,root-children)))
-               (summaries (+org-mindmap--extract-summaries root-node)))
-          (json-encode
-           `((topic . ,(alist-get 'topic root-node))
-             (id . ,(alist-get 'id root-node))
-             (begin . ,(alist-get 'begin root-node))
-             (expanded . t)
-             (children . ,(alist-get 'children root-node))
-             (summaries . ,(vconcat summaries)))))))))
+        (let ((region-active (use-region-p)))
+          (cond (region-active
+                 (narrow-to-region (region-beginning) (region-end)))
+                ((not doom-org-mindmap-use-narrow)
+                 (widen)))
+          (let* ((tree (org-element-parse-buffer)) ;; Full parse
+                 (root-children (+org-mindmap--process-children tree))
+                 (file-title
+                  (car (cdr (assoc "TITLE" (org-collect-keywords '("TITLE"))))))
+                 (root-title
+                  (or file-title
+                      (when (buffer-file-name)
+                        (file-name-base (buffer-file-name)))
+                      (buffer-name)))
+                 (narrowed-p (buffer-narrowed-p))
+                 (title-text
+                  (cond (region-active (concat root-title " [selection]"))
+                        (narrowed-p (concat root-title " [focused]"))
+                        (t root-title)))
+                 (root-id "root")
+                 (root-node
+                  `((topic . ,title-text)
+                    (id . ,root-id)
+                    (begin . ,(point-min))
+                    (expanded . t)
+                    (root . t)
+                    (children . ,root-children)))
+                 (summaries (+org-mindmap--extract-summaries root-node)))
+            (json-encode
+             `((topic . ,(alist-get 'topic root-node))
+               (id . ,(alist-get 'id root-node))
+               (begin . ,(alist-get 'begin root-node))
+               (expanded . t)
+               (children . ,(alist-get 'children root-node))
+               (summaries . ,(vconcat summaries))))))))))
 
 ;;; Navigation (Bidirectional Sync)
 

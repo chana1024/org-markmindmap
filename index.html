@@ -815,6 +815,17 @@
             }
         }
 
+        // Global keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+i to toggle items
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
+                e.preventDefault();
+                const checkbox = document.getElementById('includeItems');
+                checkbox.checked = !checkbox.checked;
+                updateOrgConfig();
+            }
+        });
+
         // Initialize
         async function init() {
             initSettings();
