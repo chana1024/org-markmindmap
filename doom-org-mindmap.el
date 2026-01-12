@@ -152,7 +152,9 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
          ((eq type 'headline)
           (push (+org-mindmap--headline-to-json child) result))
          ((eq type 'section)
-          (setq result (append (nreverse (+org-mindmap--process-children child)) result)))
+          (setq result
+                (append
+                 (nreverse (+org-mindmap--process-children child)) result)))
          ((and doom-org-mindmap-include-items (eq type 'plain-list))
           (setq result (append (+org-mindmap--process-list child) result)))
          ((and doom-org-mindmap-include-content (eq type 'paragraph))
@@ -294,10 +296,11 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
     (with-current-buffer +org-mindmap--current-buffer
       (save-restriction
         (let ((region-active (use-region-p)))
-          (cond (region-active
-                 (narrow-to-region (region-beginning) (region-end)))
-                ((not doom-org-mindmap-use-narrow)
-                 (widen)))
+          (cond
+           (region-active
+            (narrow-to-region (region-beginning) (region-end)))
+           ((not doom-org-mindmap-use-narrow)
+            (widen)))
           (let* ((tree (org-element-parse-buffer)) ;; Full parse
                  (root-children (+org-mindmap--process-children tree))
                  (file-title
@@ -309,9 +312,13 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
                       (buffer-name)))
                  (narrowed-p (buffer-narrowed-p))
                  (title-text
-                  (cond (region-active (concat root-title " [selection]"))
-                        (narrowed-p (concat root-title " [focused]"))
-                        (t root-title)))
+                  (cond
+                   (region-active
+                    (concat root-title " [selection]"))
+                   (narrowed-p
+                    (concat root-title " [focused]"))
+                   (t
+                    root-title)))
                  (root-id "root")
                  (root-node
                   `((topic . ,title-text)
@@ -518,8 +525,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
       (httpd-start)
       (setq +org-mindmap--server-running t)
       ;; Add hook to track buffer switches to org buffers
-      (add-hook
-       'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
+      (add-hook 'window-state-change-functions '+org-mindmap--on-buffer-switch)
       (message "Mindmap server started on port %d" doom-org-mindmap-port))))
 (defun +org-mindmap--stop-server ()
   "Stop the mindmap HTTP server."
@@ -528,7 +534,7 @@ FRAME argument is ignored (required by `window-buffer-change-functions')."
     (setq +org-mindmap--server-running nil)
     ;; Remove buffer switch hook
     (remove-hook
-     'window-buffer-change-functions #'+org-mindmap--on-buffer-switch)
+     'window-state-change-functions #'+org-mindmap--on-buffer-switch)
     (message "Mindmap server stopped")))
 
 ;;; Interactive Commands
